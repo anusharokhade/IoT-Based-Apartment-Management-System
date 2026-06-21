@@ -1,0 +1,172 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <DHT.h>
+#include <Servo.h>
+
+#define DHTPIN 4          // DHT sensor data pin (GPIO4 -> D2)
+#define DHTTYPE DHT11     // Sensor type
+
+#define SERVOPIN 5        // Servo connected to GPIO5 -> D1
+#define GAS_THRESHOLD 7   // Gas leak threshold in ppm
+#define ROTATION_ANGLE 180
+
+DHT dht(DHTPIN, DHTTYPE);
+Servo servo;
+
+String writeAPIKey = "JYP8CRY39HILXNPZ";  // ThingSpeak Write API Key
+String readAPIKey = "UVLIOZ47RTOXHCVN";   // ThingSpeak Read API Key
+const char* ssid = "sunil-4G";             // WiFi SSID
+const char* pass = "sfrodd123";            // WiFi Password
+const char* server = "api.thingspeak.com";
+
+bool hasRotated = false;
+bool isGasLeaked = false;
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  servo.attach(SERVOPIN);
+  servo.write(0);
+  Serial.println("Servo Reset..");
+
+  Serial.print("Connecting to WiFi");
+  WiFi.begin(ssid, pass);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi connected!");
+
+  // Initialize motor position in ThingSpeak (Field3 = 0)
+  /*WiFiClient client2;
+  if (client2.connect(server, 80)) {
+    String postStr = "api_key=" + writeAPIKey;
+    postStr += "&field3=0";  // Set field3 to 0 degrees
+
+    client2.print("POST /update HTTP/1.1\r\n");
+    client2.print("Host: api.thingspeak.com\r\n");
+    client2.print("Connection: close\r\n");
+    client2.print("Content-Type: application/x-www-form-urlencoded\r\n");
+    client2.print("Content-Length: " + String(postStr.length()) + "\r\n\r\n");
+    client2.print(postStr);
+
+    Serial.println("Motor initialized to 0 degrees and updated to ThingSpeak Field3!");
+    client2.stop();
+  } else {
+    Serial.println("Failed to connect to ThingSpeak for initialization.");
+  }
+
+  delay(2000); // small delay to allow ThingSpeak update
+  */
+}
+
+void loop() {
+  // Reconnect WiFi if disconnected
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.begin(ssid, pass);
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+    }
+    Serial.println("\nWiFi Reconnected!");
+  }
+
+  // Read temperature and gas level
+  float temperature = dht.readTemperature();
+  delay(500);
+  float gasLevel = analogRead(A0) / 1023.0 * 100;
+  delay(500);
+
+  if (isnan(temperature)) {
+    Serial.println("Failed to read from DHT sensor!");
+    delay(1000);
+    return;
+  }
+
+  Serial.print("Temperature: ");
+  Serial.print(temperature);
+  Serial.print(" °C, Gas Level: ");
+  Serial.print(gasLevel);
+  Serial.println(" ppm");
+
+  // Handle Gas Leakage
+  if (gasLevel >= GAS_THRESHOLD && !isGasLeaked) {
+    Serial.println("Gas level reached 7 ppm or higher! Warning alarm triggered and rotating servo...");
+    if (!hasRotated) {
+      servo.write(ROTATION_ANGLE);
+      delay(500);
+      hasRotated = true;
+    }
+    isGasLeaked = true;
+  } else if (gasLevel < GAS_THRESHOLD && isGasLeaked) {
+    Serial.println("Gas level normal. Resetting servo...");
+    if (hasRotated) {
+      servo.write(0);
+      delay(1000);
+      hasRotated = false;
+    }
+    isGasLeaked = false;
+  }
+
+  // Send temperature and gas level to ThingSpeak
+  WiFiClient client;
+  if (client.connect(server, 80)) {
+    String postStr = "api_key=" + writeAPIKey;
+    postStr += "&field1=" + String(temperature);
+    postStr += "&field2=" + String(gasLevel);
+
+    client.print("POST /update HTTP/1.1\r\n");
+    client.print("Host: api.thingspeak.com\r\n");
+    client.print("Connection: close\r\n");
+    client.print("Content-Type: application/x-www-form-urlencoded\r\n");
+    client.print("Content-Length: " + String(postStr.length()) + "\r\n\r\n");
+    client.print(postStr);
+
+    Serial.println("Data sent to ThingSpeak!");
+    client.stop();
+  } else {
+    Serial.println("Failed to connect to ThingSpeak for sending data.");
+  }
+
+  delay(1000); // Give ThingSpeak time to update
+
+  // Now read angle from field3
+  /*WiFiClient client2;
+  HTTPClient http;
+  String readURL = "http://api.thingspeak.com/channels/2796922/fields/3/last.txt";
+
+  if (readAPIKey != "") {
+    readURL += "?api_key=" + readAPIKey;
+  }
+
+  if (http.begin(client2, readURL)) {
+    Serial.println("Reading angle from ThingSpeak...");
+    int httpCode = http.GET();
+    if (httpCode > 0) {
+      String angleStr = http.getString();
+      int angle = angleStr.toInt();
+      Serial.print("Angle received: ");
+      Serial.println(angle);
+
+      if (angle == ROTATION_ANGLE && !hasRotated) {
+        servo.write(ROTATION_ANGLE);
+        hasRotated = true;
+        Serial.println("Motor rotated to 130 degrees.");
+      } else if (angle == 0 && hasRotated) {
+        servo.write(0);
+        hasRotated = false;
+        Serial.println("Motor reset to 0 degrees.");
+      }
+      delay(500);
+    } else {
+      Serial.print("Error in HTTP GET: ");
+      Serial.println(httpCode);
+    }
+    http.end();
+  } else {
+    Serial.println("Failed to initiate HTTP GET");
+  }
+*/
+  Serial.println("Waiting 2 seconds...\n");
+  delay(2000); // Must wait 15s for ThingSpeak (free plan)
+}
